@@ -58,10 +58,45 @@ sub cmd {
 	}
 	system($cmd);
 	if($? == -1) {
-		print "ERROR: failed to run command: $cmd\n";
+		print STDERR "ERROR: failed to run command: $cmd\n";
 		return 1;
 	}
 	return $? >> 8;
+}
+
+#
+# Main init routine for when this module is started (or created), we just
+# do the standard stuff that the default firewall module did, except we
+# don't do anything to the rules, that will happen later.
+#
+sub iptables_init {
+	my $fail = 0;
+	my @modules = ( "nf_conntrack", "nf_contrack_ftp", "nf_contrack_tftp",
+		"nf_nat", "nf_nat_ftp", "nf_nat_tftp", "nf_nat_proto_gre", 
+		"nf_nat_sip", "nf_nat_h323", "nf_nat_pptp" );
+	my %sysctl = (
+		"net.netfilter.nf_conntrack_tcp_be_liberal" => 1,
+		"net.nf_conntrack_max" => 16384,
+		"net.netfilter.nf_conntack_expect_max" => 2048,
+		"net.netfilter.nf_conntrack_tcp_timeout_established" => 7200 );
+
+	#
+	# Load all the modules...
+	#
+	foreach my $module (@modules) {
+		$fail += cmd("modprobe --syslog ${module}");
+	}
+	
+	#
+	# Change sysctl settings...
+	#
+	foreach my $param (keys %sysctl) {
+		my $value = $sysctl{$param};
+		$fail += cmd("sysctl -q -w ${param}=${value}");
+	}
+	
+	return 1 if $fail;
+	return 0;
 }
 
 #
@@ -70,14 +105,21 @@ sub cmd {
 # 1. Is this a valid table/chain to set a policy on
 # 2. Is the policy a valid type
 #
+# If the base node (table) isn't setup then we won't get
+# the table name, so we have to suggest creating the base node
+# first.
+#
 sub validate_policy {
 	my($table, $chain, $policy) = @_;
 
+	if($table eq "") {
+		print STDERR "the table is not yet setup, unable to set policy.\n";
+		return 1;
+	}
 	if(not defined $sys_chains->{$table}->{$chain}) { 
 		print STDERR "policy can not be set on ${table}/${chain}\n";
 		return 1;
 	}
-	
 	if(not defined $valid_policy->{$policy}) {
 		print STDERR "policy must be one of: " . join(", ", keys %{$valid_policy}) . "\n";
 		return 1;
@@ -174,19 +216,7 @@ sub has_incomplete_subchains {
 sub process_chain {
 	my($table, $chain, $policy, $protection, @rules) = @_;
 	
-	#
-	# TODO: move protection, doesn't work in here!
-	#
-	
-	print "CHAIN: $table/$chain start.\n";
-	if(defined $sys_chains->{$table}->{$chain}) {
-		#
-		# If we are protected then set policy to ACCEPT
-		#
-		if(defined $protection && $protection eq "enable") {
-			print "\tiptables -t $table -P $chain ACCEPT\n";
-		}
-	} else { 
+	if(not defined $sys_chains->{$table}->{$chain}) {
 		print "\tiptables -t $table -N $chain\n";
 	}
     
@@ -200,7 +230,6 @@ sub process_chain {
 		$policy = "ACCEPT" if(not defined $policy);
 		print "\tiptables -t $table -P $chain $policy\n";
 	}
-	print "CHAIN: $table/$chain complete.\n";
 	return 0;
 }
 
@@ -219,9 +248,9 @@ sub build_rules_list {
 	
 	if(not defined $rules_cache{"$table/$chain"}) {
 		my @rules = ();
-		my @nos = $cf->listNodes("table ${table} chain ${chain} rule");
+		my @nos = $cf->listNodes("${table} chain ${chain} rule");
 		foreach my $n (@nos) {
-			my $rule = $cf->returnValue("table ${table} chain ${chain} rule ${n} exec");
+			my $rule = $cf->returnValue("${table} chain ${chain} rule ${n} exec");
 			push @rules, $rule if(defined $rule);
 		}
 		$rules_cache{"$table/$chain"} = \@rules;
@@ -239,12 +268,9 @@ sub find_variable_usage {
 	my @rc = ();
 	
 	foreach my $table (keys %{$sys_chains}) {
-		print "FIND VAR: looking at $table\n";
-		foreach my $chain ($cf->listNodes("table ${table} chain")) {
-			print "-- $chain\n";
+		foreach my $chain ($cf->listNodes("${table} chain")) {
 			my @rules = @{ build_rules_list($cf, $table, $chain) };
 			if(grep(/\[${var}\]/, @rules)) {
-				print "found var $var\n";
 				push @rc, $table;
 			}
 		}
@@ -262,9 +288,7 @@ sub find_ipset_usage {
 	my %rc = ();
 	
 	foreach my $table (keys %{$sys_chains}) {
-		print "FIND VAR: looking at $table\n";
-		foreach my $chain ($cf->listNodes("table ${table} chain")) {
-			print "-- $chain\n";
+		foreach my $chain ($cf->listNodes("${table} chain")) {
 			my @rules = @{ build_rules_list($cf, $table, $chain) };
 			if(grep(/-m\s+set/ && (/--set\s+${ipset}\b/ || /--match-set\s+${ipset}\b/), @rules)) {
 				$rc{"${table}/${chain}"} = 1;
@@ -281,12 +305,10 @@ sub find_ipset_usage {
 sub process_table {
 	my($cf, $table, $vars) = @_;
 	
-	print "Processing table: ${table}\n";
-	
 	#
 	# First we build a hash of the chains we will need to process...
 	#
-	my @chains = $cf->listNodes("table ${table} chain");
+	my @chains = $cf->listNodes("${table} chain");
 	my %chain_done = ();
 	my $work_to_do = 1;	# first loop is forced
 	my $work_done;
@@ -304,8 +326,6 @@ sub process_table {
 		foreach my $chain (@chains) {
 			next if($chain_done{$chain});
 		
-			print "Looking at chain: $chain\n";	
-
 			my $rules = build_rules_list($cf, $table, $chain);
 			if(has_incomplete_subchains(\%chain_done, @{$rules})) {
 				$work_to_do = 1;
@@ -313,15 +333,15 @@ sub process_table {
 			}
 			my $policy = undef;
 			if(defined $sys_chains->{$table}->{$chain}) {
-				$policy = $cf->returnValue("table ${table} chain ${chain} policy");
+				$policy = $cf->returnValue("${table} chain ${chain} policy");
 			}
-			my $protection = $cf->returnValue("table ${table} chain ${chain} protected-update");
+			my $protection = $cf->returnValue("${table} chain ${chain} protected-update");
 			$rc += process_chain($table, $chain, $policy, $protection, preprocess($vars, @{$rules}));
 			$chain_done{$chain} = 1;
 			$work_done++;
 		}
 		if($work_done == 0) {
-			print "ERROR: loop detected in table ${table} - unable to complete.\n";
+			print STDERR "ERROR: loop detected in table ${table} - unable to complete.\n";
 			$rc++;
 			last;
 		}
@@ -337,11 +357,8 @@ sub process_table {
 sub prepare_table {
 	my($cf, $table) = @_;
 	
-	print "Preparing table: ${table}\n";
-
 	foreach my $chain (keys %{$sys_chains->{$table}}) {
-		print "SYSCHAIN: $chain\n";
-		my $protection = $cf->returnValue("table ${table} chain ${chain} protected-update");
+		my $protection = $cf->returnValue("${table} chain ${chain} protected-update");
 		if(defined $protection && $protection eq "enable") {
 			print "\tiptables -t ${table} -P ${chain} ACCEPT\n";
 		}
@@ -405,6 +422,15 @@ sub ipset_update {
 }
 
 
+# ==============================================================================
+# MAIN ENTRY POINT
+# ==============================================================================
+
+# ------------------------------------------------------------------------------
+# We use this script to validate some arguments, so we check the first argument
+# to determin what action to take
+# ------------------------------------------------------------------------------
+
 my $cmd = shift @ARGV;
 
 if(not defined $cmd) {
@@ -415,33 +441,55 @@ if(not defined $cmd) {
 exit(validate_policy(@ARGV)) if($cmd eq "validate_policy");
 exit(validate_protected_update(@ARGV)) if($cmd eq "validate_protected_update");
 
+if($cmd ne "commit" && $cmd ne "init") {
+	print STDERR "$0: unknown request: $cmd\n";
+	exit 1;
+}
 
-#
+# ------------------------------------------------------------------------------
 # Main process...
-#
-
-#
-# First we check to see what things have changed, we check the tables
-# and the variables
-#
+# ------------------------------------------------------------------------------
 
 my $cf = new Vyatta::Config();
 my %tables_to_update = ();
 my $fail = 0;
 
-$cf->setLevel("iptables");
+# ------------------------------------------------------------------------------
+# Before we can do anything we need to look to see if the filewall, port-forward
+# or zone-policy have any configs. If they do, then we print a warning and do
+# nothing, since we don't want to conflict.
+#
+# We will not fail here though, so that we can commit the config.
+# ------------------------------------------------------------------------------
+
+for my $system ("firewall", "port-forward", "zone-policy") {
+	if($cf->listNodes($system)) {
+		print STDERR "WARNING: ${system} is configured.\n";
+		$fail = 1;
+	}
+}
+if($fail) {
+	print STDERR "WARNING: iptables/ipsets will not be enabled.\n";
+	exit 0;
+}
+
+# ------------------------------------------------------------------------------
+# Check for other post-conflict options...
+# ------------------------------------------------------------------------------
+
+exit(iptables_init(@ARGV)) if($cmd eq "init");
 
 # ------------------------------------------------------------------------------
 # STEP 1: Check that any deleted ipsets are not being used
 # ------------------------------------------------------------------------------
 
+$cf->setLevel("iptables");
 my %ipset_status = $cf->listNodeStatus("ipset");
 foreach my $ipset (keys %ipset_status) {
-	print "Ipset $ipset ... status $ipset_status{$ipset}\n";
 	if($ipset_status{$ipset} eq "deleted") {
 		my %refs = find_ipset_usage($cf, $ipset);
 		if(scalar keys %refs) {
-			print "unable to delete ipset ${ipset}, used in: " .
+			print STDERR "unable to delete ipset ${ipset}, used in: " .
 					join(", ", keys %refs) . "\n";
 			$fail = 1;
 		}
@@ -472,7 +520,7 @@ exit 1 if $fail;
 # ------------------------------------------------------------------------------
 
 foreach my $table (keys %{$sys_chains}) {
-	my %status = $cf->listNodeStatus("table ${table}");
+	my %status = $cf->listNodeStatus("${table}");
 	if(defined $status{"chain"} && $status{"chain"} ne "static") {
 		$tables_to_update{$table} = 1;
 	}
@@ -489,7 +537,6 @@ foreach my $table (keys %{$sys_chains}) {
 my %var_status = $cf->listNodeStatus("variable");
 foreach my $var (keys %var_status) {
 	if($var_status{$var} ne "static") {
-		print "changed var: $var\n";
 		foreach my $table (find_variable_usage($cf, $var)) {
 			$tables_to_update{$table} = 1;
 		}
@@ -516,10 +563,5 @@ foreach my $table (keys %tables_to_update) {
 	$fail += process_table($cf, $table, \%vars);
 }
 exit 1 if $fail;
-
-
 exit 0;
-
-
-
 
