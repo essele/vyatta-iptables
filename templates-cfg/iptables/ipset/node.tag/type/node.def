@@ -1,0 +1,3 @@
+type: txt
+default: "hash:ip"
+help: type of ipset, see ipset -h

@@ -1,0 +1,3 @@
+multi:
+type: txt
+help: Value of the variable
