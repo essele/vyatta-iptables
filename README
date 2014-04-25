@@ -1,0 +1,4 @@
+This package has Vyatta configuration templates and scripts for 
+low level iptables and ipsets access
+
+See README.md for details.

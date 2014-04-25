@@ -1,0 +1,6 @@
+The Debian Package vyatta-iptables
+----------------------------------
+
+This package has Vyatta low level support for iptables and ipsets.
+
+ -- Lee Essen <lee.essen@nowonline.co.uk>  Fri, 25 Apr 2014 11:11:20 UTC

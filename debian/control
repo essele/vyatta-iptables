@@ -1,0 +1,16 @@
+Source: vyatta-iptables
+Section: contrib/net
+Priority: extra
+Maintainer: Lee Essen <lee.essen@nowonline.co.uk>
+Standards-Version: 3.9.1
+Build-Depends: debhelper (>= 5), autotools-dev, autoconf
+
+Package: vyatta-iptables
+Architecture: all
+Depends: vyatta-cfg-system,
+ vyatta-cfg,
+ vyatta-op,
+ ${misc:Depends}
+Replaces: vyatta-iptables
+Description: Vyatta low level support for iptables and ipsets
+ Vyatta support for accessing low level iptables and ipsets.

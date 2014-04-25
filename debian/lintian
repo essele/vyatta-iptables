@@ -1,0 +1,2 @@
+vyatta-iptables: file-in-unusual-dir
+vyatta-iptables: dir-or-file-in-opt
