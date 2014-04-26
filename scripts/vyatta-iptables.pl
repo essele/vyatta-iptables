@@ -67,20 +67,24 @@ my $psn_options = {
 						path => "/proc/sys/net/ipv4/tcp_syncookies" }
 };
 
-sub allowed_psn {
-	my($option) = @_;
-	my @list = ();
+sub validate_psn {
+	my($option, $value) = @_;
+	my %list = ();
 	
-		print STDERR ">>> $option\n";
+	print STDERR "ValidatePSN: opt=$option val=$value\n";
 	
 	return 1 if(not defined $psn_options->{$option});
 	my @opts = keys(%{$psn_options->{$option}});
 	foreach my $o (@opts) {
 		next if($o eq "default");
 		next if($o eq "path");
-		push @list, $o;
+		$list{$o} = 1;
 	}
-	print join(" ", @list) . "\n";
+	if(not defined $list{$value}) {
+		print STDERR "illegal value for $option, can be: " .
+				join(", ", keys %list) . "\n";
+		return 1;
+	}
 	return 0;
 }
 
@@ -142,7 +146,7 @@ sub iptables_init {
 	my %sysctl = (
 		"net.netfilter.nf_conntrack_tcp_be_liberal" => 1,
 		"net.nf_conntrack_max" => 16384,
-		"net.netfilter.nf_conntack_expect_max" => 2048,
+		"net.netfilter.nf_conntrack_expect_max" => 2048,
 		"net.netfilter.nf_conntrack_tcp_timeout_established" => 7200 );
 
 	#
@@ -158,6 +162,14 @@ sub iptables_init {
 	foreach my $param (keys %sysctl) {
 		my $value = $sysctl{$param};
 		$fail += cmd("sysctl -q -w ${param}=${value}");
+	}
+	
+	#
+	# Initialise the tables...
+	#
+	foreach my $table (keys %{$sys_chains}) {
+		$fail += cmd("iptables -t ${table} -F");
+		$fail += cmd("iptables -t ${table} -X");
 	}
 	
 	return 1 if $fail;
@@ -375,6 +387,9 @@ sub process_table {
 	# First we build a hash of the chains we will need to process...
 	#
 	my @chains = $cf->listNodes("${table} chain");
+
+	return 0 if($#chains == -1);	
+	
 	my %chain_done = ();
 	my $work_to_do = 1;	# first loop is forced
 	my $work_done;
@@ -511,9 +526,9 @@ if(not defined $cmd) {
 
 exit(validate_policy(@ARGV)) if($cmd eq "validate_policy");
 exit(validate_protected_update(@ARGV)) if($cmd eq "validate_protected_update");
-exit(allowed_psn(@ARGV)) if($cmd eq "allowed_psn");
+exit(validate_psn(@ARGV)) if($cmd eq "validate_psn");
 
-if($cmd ne "commit" && $cmd ne "init") {
+if($cmd ne "commit" && $cmd ne "init" && $cmd ne "load") {
 	print STDERR "$0: unknown request: $cmd\n";
 	exit 1;
 }
@@ -534,7 +549,8 @@ my $fail = 0;
 # We will not fail here though, so that we can commit the config.
 # ------------------------------------------------------------------------------
 
-for my $system ("firewall", "port-forward", "zone-policy") {
+for my $system ("firewall", "port-forward", "zone-policy", "service webproxy",
+				"system conntrack", "service nat") {
 	if($cf->listNodes($system)) {
 		print STDERR "WARNING: ${system} is configured.\n";
 		$fail = 1;
@@ -602,11 +618,11 @@ foreach my $ipset (keys %ipset_status) {
 }
 exit 1 if $fail;
 
-
 # ------------------------------------------------------------------------------
 # STEP 3: Work out what tables have been altered by looking at the chain
 #         and policy nodes
 # ------------------------------------------------------------------------------
+
 
 foreach my $table (keys %{$sys_chains}) {
 	my %status = $cf->listNodeStatus("${table}");
@@ -629,6 +645,16 @@ foreach my $var (keys %var_status) {
 		foreach my $table (find_variable_usage($cf, $var)) {
 			$tables_to_update{$table} = 1;
 		}
+	}
+}
+
+# ------------------------------------------------------------------------------
+# If we specify "load" then we will force all the tables to load
+# ------------------------------------------------------------------------------
+
+if($cmd eq "load") {
+	foreach my $table (keys %{$sys_chains}) {
+		$tables_to_update{$table} = 1;
 	}
 }
 
