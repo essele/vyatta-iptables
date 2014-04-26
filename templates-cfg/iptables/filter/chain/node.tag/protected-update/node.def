@@ -2,5 +2,5 @@ type: txt
 
 help: If the policy is DROP or REJECT then use ACCEPT until all rules are added
 
-syntax:expression: exec "/lee/vyatta-iptables.pl validate_protected_update '$VAR(../../@)' '$VAR(../@)' '$VAR(@)'"
+syntax:expression: exec "/opt/vyatta/sbin/vyatta-iptables.pl validate_protected_update '$VAR(../../@)' '$VAR(../@)' '$VAR(@)'"
 allowed: echo "enable disable"

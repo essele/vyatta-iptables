@@ -1,5 +1,5 @@
 type: txt
 help: Default policy for this table
-syntax:expression: exec "/lee/vyatta-iptables.pl validate_policy '$VAR(../..)' '$VAR(../@)' '$VAR(@)'"
+syntax:expression: exec "/opt/vyatta/sbin/vyatta-iptables.pl validate_policy '$VAR(../..)' '$VAR(../@)' '$VAR(@)'"
 allowed: echo ACCEPT DROP REJECT
 

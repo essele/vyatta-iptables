@@ -46,6 +46,71 @@ my $sys_chains = {
 };
 
 #
+# /proc/sys/net options
+#
+my $psn_options = {
+		"send-redirects" => { default => 1, enable => 1, disable => 0, 
+						path => "/proc/sys/net/ipv4/conf/*/send_redirects" },
+		"log-martians" => { default => 1, enable => 1, disable => 0, 
+						path => "/proc/sys/net/ipv4/conf/*/log_martians" },
+		"all-ping" => { default => 0, enable => 0, disable => 1, 
+						path => "/proc/sys/net/ipv4/icmp_echo_ignore_all" },
+		"broadcast-ping" => { default => 1, enable => 0, disable => 1,
+						path => "/proc/sys/net/ipv4/icmp_echo_ignore_broadcasts" },
+		"ip-src-route" => { default => 0, enable => 1, disable => 0,
+						path => "/proc/sys/net/ipv4/conf/*/accept_source_route" },
+		"receive-redirects" => { default => 0, enable => 1, disable => 0, 
+						path => "/proc/sys/net/ipv4/conf/*/accept_redirects" },
+		"source-validation" => { default => 0, strict => 1, loose => 2, disable => 0, 
+						path => "/proc/sys/net/ipv4/conf/*/rp_filter" },
+		"syn-cookies" => { default => 1, enable => 1, disable => 0, 
+						path => "/proc/sys/net/ipv4/tcp_syncookies" }
+};
+
+sub allowed_psn {
+	my($option) = @_;
+	my @list = ();
+	
+		print STDERR ">>> $option\n";
+	
+	return 1 if(not defined $psn_options->{$option});
+	my @opts = keys(%{$psn_options->{$option}});
+	foreach my $o (@opts) {
+		next if($o eq "default");
+		next if($o eq "path");
+		push @list, $o;
+	}
+	print join(" ", @list) . "\n";
+	return 0;
+}
+
+sub set_psn {
+	my($option, $value) = @_;
+	my $rc = 0;
+
+	if(not defined $psn_options->{$option}) {
+		print STDERR "unknown option: $option\n";
+		return 1;
+	}
+	if(defined $value) {
+		if(defined $psn_options->{$option}->{$value}) {
+			$value = $psn_options->{$option}->{$value};
+		} else {
+			$value = undef;
+		}
+	}
+	$value = $psn_options->{$option}->{"default"} if not defined $value;
+	my @paths = glob($psn_options->{$option}->{"path"});
+
+	foreach my $path (@paths) {
+		$rc += cmd("echo ${value} > ${path}");
+	}
+	return 1 if $rc;
+	return 0;
+}
+
+
+#
 # Execute (or print) a given command and check the return status
 # for failure
 #
@@ -215,21 +280,23 @@ sub has_incomplete_subchains {
 #
 sub process_chain {
 	my($table, $chain, $policy, $protection, @rules) = @_;
+	my $rc = 0;
 	
 	if(not defined $sys_chains->{$table}->{$chain}) {
-		print "\tiptables -t $table -N $chain\n";
+		$rc += cmd("iptables -t $table -N $chain");
 	}
     
 	foreach(@rules) {
-		print "\tiptables -t $table -A $chain $_\n";
+		$rc += cmd("iptables -t $table -A $chain $_");
 	}
 	#
 	# Set the final policy...
 	#
 	if(defined $sys_chains->{$table}->{$chain}) {
 		$policy = "ACCEPT" if(not defined $policy);
-		print "\tiptables -t $table -P $chain $policy\n";
+		$rc += cmd("iptables -t $table -P $chain $policy");
 	}
+	return 1 if $rc;
 	return 0;
 }
 
@@ -256,7 +323,6 @@ sub build_rules_list {
 		$rules_cache{"$table/$chain"} = \@rules;
 		return \@rules;
 	}
-	print "CACHED RESULTS FOR $table/$chain\n";
 	return $rules_cache{"$table/$chain"};
 }
 
@@ -356,17 +422,18 @@ sub process_table {
 #
 sub prepare_table {
 	my($cf, $table) = @_;
+	my $rc = 0;
 	
 	foreach my $chain (keys %{$sys_chains->{$table}}) {
 		my $protection = $cf->returnValue("${table} chain ${chain} protected-update");
 		if(defined $protection && $protection eq "enable") {
-			print "\tiptables -t ${table} -P ${chain} ACCEPT\n";
+			$rc += cmd("iptables -t ${table} -P ${chain} ACCEPT");
 		}
 	}
-	print "\tiptables -t ${table} -F\n";
-	print "\tiptables -t ${table} -X\n";
-	
-	# TODO: cmd() and return codes
+	$rc += cmd("iptables -t ${table} -F");
+	$rc += cmd("iptables -t ${table} -X");
+
+	return 1 if $rc;	
 	return 0;
 }
 
@@ -376,6 +443,8 @@ sub prepare_table {
 
 sub ipset_delete {
 	my($cf, $ipset) = @_;
+	my $rc = cmd("ipset list ${ipset} >/dev/null 2>&1");
+	return if($rc != 0);
 
 	return cmd("ipset destroy ${ipset}");
 }
@@ -383,9 +452,12 @@ sub ipset_create {
 	my($cf, $ipset) = @_;
 	my $type = $cf->returnValue("ipset ${ipset} type");
 	my $rc;
-
-	$rc = cmd("ipset create ${ipset} ${type}");
-	return 1 if $rc;
+	
+	$rc = cmd("ipset list ${ipset} >/dev/null 2>&1");
+	if($rc != 0) {
+		$rc = cmd("ipset create ${ipset} ${type}");
+		return 1 if $rc;
+	}
 	return ipset_update($cf, $ipset, 1);
 }
 sub ipset_update {
@@ -421,7 +493,6 @@ sub ipset_update {
 	return 0;
 }
 
-
 # ==============================================================================
 # MAIN ENTRY POINT
 # ==============================================================================
@@ -440,6 +511,7 @@ if(not defined $cmd) {
 
 exit(validate_policy(@ARGV)) if($cmd eq "validate_policy");
 exit(validate_protected_update(@ARGV)) if($cmd eq "validate_protected_update");
+exit(allowed_psn(@ARGV)) if($cmd eq "allowed_psn");
 
 if($cmd ne "commit" && $cmd ne "init") {
 	print STDERR "$0: unknown request: $cmd\n";
@@ -493,6 +565,23 @@ foreach my $ipset (keys %ipset_status) {
 					join(", ", keys %refs) . "\n";
 			$fail = 1;
 		}
+	}
+}
+exit 1 if $fail;
+
+# ------------------------------------------------------------------------------
+# STEP 2: Handle the options (/proc/sys/net)
+# ------------------------------------------------------------------------------
+
+my %option_status = $cf->listNodeStatus("option");
+foreach my $option (keys %option_status) {
+	if($option_status{$option} eq "deleted") {
+		# Set to default...
+		$fail += set_psn($option, undef);
+	} elsif($option_status{$option} ne "static") {
+		# A change or an add, means use the given value
+		my $value = $cf->returnValue("option ${option}");
+		$fail += set_psn($option, $value);
 	}
 }
 exit 1 if $fail;
