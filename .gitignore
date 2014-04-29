@@ -1,0 +1,15 @@
+INSTALL
+Makefile
+Makefile.in
+aclocal.m4
+build-stamp
+config.guess
+config.log
+config.status
+config.sub
+config/
+configure
+debian/files
+debian/vyatta-iptables.debhelper.log
+debian/vyatta-iptables.substvars
+debian/vyatta-iptables/

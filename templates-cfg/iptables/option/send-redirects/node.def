@@ -1,4 +1,4 @@
 type: txt
 help: allows setting /proc/sys/net options
-syntax:expression: $VAR(@) in "enable", "disable"; "must be set to enable or disable"
-allowed: /opt/vyatta/sbin/vyatta-iptables.pl allowed_psn '$VAR(@)'
+#syntax:expression: exec "/opt/vyatta/sbin/vyatta-iptables.pl validate_psn '$VAR(.)' '$VAR(@)'"
+allowed: /opt/vyatta/sbin/vyatta-iptables.pl allowed_psn ${COMP_WORDS[$(expr $COMP_CWORD - 1)]}

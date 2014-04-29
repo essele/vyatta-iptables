@@ -67,24 +67,37 @@ my $psn_options = {
 						path => "/proc/sys/net/ipv4/tcp_syncookies" }
 };
 
-sub validate_psn {
-	my($option, $value) = @_;
+sub psn_allowed_hash {
+	my($option) = @_;
 	my %list = ();
-	
-	print STDERR "ValidatePSN: opt=$option val=$value\n";
-	
-	return 1 if(not defined $psn_options->{$option});
+
 	my @opts = keys(%{$psn_options->{$option}});
 	foreach my $o (@opts) {
 		next if($o eq "default");
 		next if($o eq "path");
 		$list{$o} = 1;
 	}
+	return %list;
+}
+
+sub validate_psn {
+	my($option, $value) = @_;
+	
+	return 1 if(not defined $psn_options->{$option});
+	my %list = psn_allowed_hash($option);
 	if(not defined $list{$value}) {
 		print STDERR "illegal value for $option, can be: " .
 				join(", ", keys %list) . "\n";
 		return 1;
 	}
+	return 0;
+}
+
+sub allowed_psn {
+	my($option) = @_;
+	
+	my %list = psn_allowed_hash($option);
+	print join(" ", keys %list) . "\n";	
 	return 0;
 }
 
@@ -302,7 +315,7 @@ sub process_chain {
 		$rc += cmd("iptables -t $table -A $chain $_");
 	}
 	#
-	# Set the final policy...
+	# Set the final policy... TODO: only if we had no problems!
 	#
 	if(defined $sys_chains->{$table}->{$chain}) {
 		$policy = "ACCEPT" if(not defined $policy);
@@ -527,6 +540,7 @@ if(not defined $cmd) {
 exit(validate_policy(@ARGV)) if($cmd eq "validate_policy");
 exit(validate_protected_update(@ARGV)) if($cmd eq "validate_protected_update");
 exit(validate_psn(@ARGV)) if($cmd eq "validate_psn");
+exit(allowed_psn(@ARGV)) if($cmd eq "allowed_psn");
 
 if($cmd ne "commit" && $cmd ne "init" && $cmd ne "load") {
 	print STDERR "$0: unknown request: $cmd\n";
@@ -603,14 +617,12 @@ foreach my $option (keys %option_status) {
 exit 1 if $fail;
 
 # ------------------------------------------------------------------------------
-# STEP 2: Do the ipset adds, deletes and changes
+# STEP 3: Do the ipset adds and changes (delete will come later)
 # ------------------------------------------------------------------------------
 
 foreach my $ipset (keys %ipset_status) {
 	if($ipset_status{$ipset} eq "added") {
 		$fail = ipset_create($cf, $ipset);
-	} elsif($ipset_status{$ipset} eq "deleted") {
-		$fail = ipset_delete($cf, $ipset);
 	} elsif($ipset_status{$ipset} eq "changed") {
 		$fail = ipset_update($cf, $ipset, 0);
 	}
@@ -619,7 +631,7 @@ foreach my $ipset (keys %ipset_status) {
 exit 1 if $fail;
 
 # ------------------------------------------------------------------------------
-# STEP 3: Work out what tables have been altered by looking at the chain
+# STEP 4: Work out what tables have been altered by looking at the chain
 #         and policy nodes
 # ------------------------------------------------------------------------------
 
@@ -635,7 +647,7 @@ foreach my $table (keys %{$sys_chains}) {
 }
 
 # ------------------------------------------------------------------------------
-# STEP 4: Look at any changed variables and see if those variables are used
+# STEP 5: Look at any changed variables and see if those variables are used
 #         in any tables, if they are we mark them to be rebuilt.
 # ------------------------------------------------------------------------------
 
@@ -659,7 +671,7 @@ if($cmd eq "load") {
 }
 
 # ------------------------------------------------------------------------------
-# STEP 5: Prepare any tables we are going to rebuild, this means clearing
+# STEP 6: Prepare any tables we are going to rebuild, this means clearing
 #         them, but also looking at protected updates.
 # ------------------------------------------------------------------------------
 
@@ -670,7 +682,7 @@ foreach my $table (keys %tables_to_update) {
 exit 1 if $fail;
 
 # ------------------------------------------------------------------------------
-# STEP 6: Actually rebuild the tables
+# STEP 7: Actually rebuild the tables
 # ------------------------------------------------------------------------------
 
 my %vars = load_variables($cf);
@@ -678,5 +690,16 @@ foreach my $table (keys %tables_to_update) {
 	$fail += process_table($cf, $table, \%vars);
 }
 exit 1 if $fail;
-exit 0;
 
+# ------------------------------------------------------------------------------
+# STEP 7: Do the ipset deletes
+# ------------------------------------------------------------------------------
+
+foreach my $ipset (keys %ipset_status) {
+	if($ipset_status{$ipset} eq "deleted") {
+		$fail = ipset_delete($cf, $ipset);
+	}
+	last if $fail;
+}
+exit 1 if $fail;
+exit 0;
